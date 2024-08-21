@@ -1,9 +1,14 @@
 #include <iostream>
 #include <Windows.h>
+#include <thread>
+#include <print>
+#include <vector>
 #include <d2d1.h>
 #include <d2d1_1.h>
+#include <wil/com.h>
 
 #pragma comment(lib, "d2d1.lib")
+
 //Zde zkusime udelat testovaci overlay pomoci Direct2D, minula je GDI
 /*
 
@@ -16,38 +21,11 @@ Step 6: Release Resources
 
 */
 
-template <class T> void SafeRelease(T** ppT)
-{
-    if (*ppT)
-    {
-        (*ppT)->Release();
-        *ppT = NULL;
-    }
-}
-
-ID2D1Factory* pFactory = NULL;
-ID2D1HwndRenderTarget* pRenderTarget = NULL;
-ID2D1SolidColorBrush* pBrush = NULL;
+wil::com_ptr<ID2D1Factory> pFactory = nullptr;
+wil::com_ptr<ID2D1HwndRenderTarget> pRenderTarget = nullptr;
+wil::com_ptr<ID2D1SolidColorBrush> pBrush = nullptr;
 
 void Paint(HWND hwnd) {
-    RECT rc;
-    GetClientRect(hwnd, &rc);
-
-    pFactory->CreateHwndRenderTarget(
-        D2D1::RenderTargetProperties(),
-        D2D1::HwndRenderTargetProperties(
-            hwnd,
-            D2D1::SizeU(
-                rc.right - rc.left,
-                rc.bottom - rc.top)
-        ),
-        &pRenderTarget
-    );
-
-    pRenderTarget->CreateSolidColorBrush(
-        D2D1::ColorF(D2D1::ColorF::Red),
-        &pBrush
-    );
 
     PAINTSTRUCT ps;
     BeginPaint(hwnd, &ps);
@@ -62,14 +40,9 @@ void Paint(HWND hwnd) {
         static_cast<FLOAT>(GetSystemMetrics(SM_CYFULLSCREEN) / 2 + 10)
     );
 
-    pRenderTarget->DrawRectangle(&rectangle1, pBrush);
+    pRenderTarget->DrawRectangle(&rectangle1, pBrush.get());
 
-    HRESULT hr = pRenderTarget->EndDraw();
-    if (hr == D2DERR_RECREATE_TARGET)
-    {
-        SafeRelease(&pRenderTarget);
-        SafeRelease(&pBrush);
-    }
+    pRenderTarget->EndDraw();
 
     EndPaint(hwnd, &ps);
 }
@@ -82,9 +55,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
     {
         PostQuitMessage(0);
-        SafeRelease(&pFactory);
-        SafeRelease(&pRenderTarget);
-        SafeRelease(&pBrush);
         std::cout << "Zaviram okno" << std::endl;
         return 0;
     }
@@ -94,6 +64,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         return 0;
     }
     break;
+    
     return 0;
 
     }
@@ -102,12 +73,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 int main()
 {
-    std::cout << "Hello World!\n";
-
+    std::println("Hello World");
     //Registrace okna, nevim proc, pry je potreba
     WNDCLASS wc = { 0 };
     wc.lpfnWndProc = WindowProc; 
-    wc.hInstance = GetModuleHandle(NULL);
+    wc.hInstance = GetModuleHandle(nullptr);
     wc.lpszClassName = "MojeTrida"; //To co je videt v process hackeru, musi sedet s CreateWindowEx
 
     RegisterClass(&wc);
@@ -120,30 +90,60 @@ int main()
         WS_VISIBLE | WS_POPUP,  //https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles
         0, 0,
         GetSystemMetrics(SM_CXFULLSCREEN), GetSystemMetrics(SM_CYFULLSCREEN),
-        NULL,
-        NULL,
-        NULL,
-        NULL
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr
     );
 
     //check
     if (!windowHandle) {
-        std::cout << "Error: " + GetLastError() << std::endl; //https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes
+        std::println("{}", GetLastError()); //https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes
         return 0;
     }
 
-    std::cout << windowHandle << std::endl;
+    std::println("{}", static_cast<PVOID>(windowHandle));
 
     SetLayeredWindowAttributes(windowHandle, RGB(0, 0, 0), NULL, LWA_COLORKEY);
 
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &pFactory);
 
+    RECT client_rect{};
+    GetClientRect(windowHandle, &client_rect);
+
+    pFactory->CreateHwndRenderTarget(
+        D2D1::RenderTargetProperties(),
+        D2D1::HwndRenderTargetProperties(
+            windowHandle,
+            D2D1::SizeU(
+                client_rect.right - client_rect.left,
+                client_rect.bottom - client_rect.top)
+        ),
+        &pRenderTarget
+    );
+
+    pRenderTarget->CreateSolidColorBrush(
+        D2D1::ColorF(D2D1::ColorF::Red),
+        &pBrush
+    );
+
     MSG msg = { };
-    while (GetMessage(&msg, NULL, 0, 0) > 0)
+
+    while (true)
     {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-        Paint(windowHandle); //Je tohle dobry napad na kresleni esp?
-        Sleep(500);
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
+        if (msg.message == WM_QUIT)
+        {
+            break;
+        }
+
+        //překreslení, řekne že je okno poškozeno a vyvolá paint
+        InvalidateRect(windowHandle, nullptr, TRUE);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 }
